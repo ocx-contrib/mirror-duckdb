@@ -134,10 +134,10 @@ assets:
   # all three in-range releases; uncommented together with their `platforms:`
   # entries in ../mirror-base.yml.
   #
-  # darwin/amd64:
-  #   - "^duckdb_cli-osx-amd64\\.zip$"
-  # darwin/arm64:
-  #   - "^duckdb_cli-osx-arm64\\.zip$"
+  darwin/amd64:
+    - "^duckdb_cli-osx-amd64\\.zip$"
+  darwin/arm64:
+    - "^duckdb_cli-osx-arm64\\.zip$"
   #
   # ── Pass 3 (windows) ───────────────────────────────────────────────────────
   # windows/amd64:
