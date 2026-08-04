@@ -67,17 +67,6 @@ duckdb -c "SELECT country, sum(amount) FROM 'sales/*.parquet' GROUP BY 1 ORDER B
 duckdb warehouse.duckdb -f build.sql
 ```
 
-## Install with ocx
-
-```sh
-ocx install ocx.sh/duckdb/duckdb
-```
-
-```sh
-# or pin a specific version
-ocx install ocx.sh/duckdb/duckdb:1.5.5
-```
-
 ## Links
 
 - [duckdb.org](https://duckdb.org)
