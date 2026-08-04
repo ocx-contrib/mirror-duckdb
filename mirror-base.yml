@@ -123,12 +123,24 @@ platforms:
     shell: bash
   #
   # ── Pass 3 (windows) ───────────────────────────────────────────────────────
-  # windows/amd64:
-  #   runner: windows-latest
-  #   shell: pwsh
-  # windows/arm64:
-  #   runner: windows-11-arm
-  #   shell: pwsh
+  # Both zips are flat and hold exactly one entry, `duckdb.exe`, at 1.5.3 and
+  # 1.5.5 alike. The `.exe` comes from the archive, so `binaries: ["duckdb"]` in
+  # metadata.json serves Windows unchanged — that list is extension-agnostic,
+  # and a `metadata-windows.json` would only be needed to add FILES (the fleet's
+  # ruff and syft mirrors are this exact shape; uv's override exists solely
+  # because Windows ships an extra `uvw`).
+  #
+  # Both runners are NATIVE to their arch — windows/arm64 is a real aarch64
+  # build on `windows-11-arm`, not an emulated x64 one — so neither leg can
+  # reproduce the translation banner that darwin/amd64 emits under Rosetta.
+  # The smoke is immune to it regardless: every positive assert counts the
+  # SQL-generated `OCXSMOKE=` marker, which no prepended banner can change.
+  windows/amd64:
+    runner: windows-latest
+    shell: pwsh
+  windows/arm64:
+    runner: windows-11-arm
+    shell: pwsh
   #
   # No `containers:` on darwin or windows — those runners have no Linux
   # container engine, and the key is rejected at spec load.

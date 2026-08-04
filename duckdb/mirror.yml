@@ -140,10 +140,16 @@ assets:
     - "^duckdb_cli-osx-arm64\\.zip$"
   #
   # ── Pass 3 (windows) ───────────────────────────────────────────────────────
-  # windows/amd64:
-  #   - "^duckdb_cli-windows-amd64\\.zip$"
-  # windows/arm64:
-  #   - "^duckdb_cli-windows-arm64\\.zip$"
+  # Windows is the ONLY platform upstream ships without a `.gz` twin, and it has
+  # no `-musl` or `-universal` sibling either, so these two are the least
+  # ambiguous patterns in the spec. Both re-verified 1-match on all three
+  # in-range releases (v1.5.3, v1.5.4, v1.5.5); the three other windows assets —
+  # `libduckdb-windows-amd64.zip`, `libduckdb-windows-arm64.zip` and
+  # `static-libs-windows-mingw.zip` — are excluded by the `^duckdb_cli-` anchor.
+  windows/amd64:
+    - "^duckdb_cli-windows-amd64\\.zip$"
+  windows/arm64:
+    - "^duckdb_cli-windows-arm64\\.zip$"
 
 # Every zip is FLAT and holds EXACTLY ONE ENTRY — `duckdb` (`duckdb.exe` on
 # Windows) at the archive root, with no wrapper directory and no LICENSE or
