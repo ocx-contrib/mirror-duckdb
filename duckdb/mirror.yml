@@ -197,7 +197,7 @@ versions:
   # ends and agrees with its tag (v1.5.3 / v1.5.5).
   min: "1.5.3"
   new_per_run: 5
-  poll_interval: "58 */6 * * *"
+  poll_interval: "57 3-23/6 * * *"
 
 tests:
   # `script:` resolves from the REPOSITORY ROOT — unlike `metadata.default` and
