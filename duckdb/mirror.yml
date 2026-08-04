@@ -1,0 +1,212 @@
+# ⚠ `extends:` is a SHALLOW merge of TOP-LEVEL KEYS. Setting a key here
+# REPLACES the base's block outright — there is no per-key merge. `platforms:`
+# is deliberately NOT restated below: it carries the container legs that make
+# this spec's libc keys honest, and restating it to tweak one runner would drop
+# them all without reddening anything.
+extends: ../mirror-base.yml
+
+name: duckdb
+
+# Logical index package `duckdb/duckdb` at the physical path
+# `ghcr.io/ocx-contrib/duckdb/duckdb` — slash segments, never hyphen-flattened.
+# Two segments always; the GitHub org IS the project's own brand (DuckDB is the
+# product, Stichting DuckDB Foundation the steward), so the org names the
+# namespace and the tool names the package. The first segment must be this
+# repo's own GitHub owner: GITHUB_TOKEN only authorises packages owned by the
+# repo the workflow runs in.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/duckdb/duckdb
+
+source:
+  type: github_release
+  owner: duckdb
+  repo: duckdb
+  # ⚠ TWO RELEASE TRAINS RUN IN PARALLEL AND INTERLEAVE BY PUBLISH DATE.
+  # duckdb maintains 1.5.x (current) alongside a 1.4.x LTS line, and both ship
+  # on the same day:
+  #
+  #   v1.5.5  2026-07-22      v1.5.3  2026-05-20
+  #   v1.5.4  2026-06-17      v1.4.5  2026-06-17   ← LTS, published between them
+  #
+  # A "newest N by published_at" read therefore yields the mixed sequence
+  # 1.5.5, 1.5.4, 1.4.5, 1.5.3 — with an OLDER version sorting between two
+  # NEWER ones. This pattern anchors the CURRENT train and excludes the LTS
+  # line outright: `v1.4.5` does not match, so ordering is by parsed semver
+  # within one train and the date interleave cannot corrupt it.
+  #
+  # The 1.4 LTS line is also asset-shaped differently — it never shipped the
+  # `-musl` variants this spec declares (they start at v1.5.0) — so mirroring
+  # both trains through one pattern would 0-match two platforms on half the
+  # range. If OCX ever wants the LTS line it is a separate package.
+  tag_pattern: "^v(?P<version>1\\.5\\.\\d+)$"
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# Measured on BOTH declared Linux arches, in BOTH libc flavours, at BOTH ends
+# of the mirrored range (1.5.3 and 1.5.5) — eight artifacts, because a
+# toolchain can change mid-series:
+#
+#   $ file duckdb_cli-linux-amd64/duckdb
+#   ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), dynamically
+#   linked, interpreter /lib64/ld-linux-x86-64.so.2, …, not stripped
+#   $ readelf -d … | grep NEEDED
+#   libpthread.so.0 libdl.so.2 libstdc++.so.6 libm.so.6 libgcc_s.so.1
+#   libc.so.6 ld-linux-x86-64.so.2
+#   $ readelf -V … | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1  → GLIBC_2.25
+#
+#   $ file duckdb_cli-linux-arm64/duckdb
+#   ELF 64-bit LSB executable, ARM aarch64, …, dynamically linked,
+#   interpreter /lib/ld-linux-aarch64.so.1, …
+#   NEEDED: … libc.so.6                    GLIBC floor also 2.25 (symmetric)
+#
+#   $ file duckdb_cli-linux-amd64-musl/duckdb
+#   ELF 64-bit LSB pie executable, x86-64, …, dynamically linked,
+#   interpreter /lib/ld-musl-x86_64.so.1, …
+#   NEEDED: libstdc++.so.6 libgcc_s.so.1 libc.musl-x86_64.so.1
+#
+#   $ file duckdb_cli-linux-arm64-musl/duckdb
+#   ELF 64-bit LSB pie executable, ARM aarch64, …, dynamically linked,
+#   interpreter /lib/ld-musl-aarch64.so.1, …
+#   NEEDED: libstdc++.so.6 libgcc_s.so.1 libc.musl-aarch64.so.1
+#
+# Identical on 1.5.3 and 1.5.5. NEITHER flavour is static — every one of the
+# eight has a PT_INTERP and a libc in DT_NEEDED — so this is the skill's
+# "musl and gnu builds, neither static" row: BOTH keys, each with its own
+# asset regex. A bare key would be a false universality claim; a glibc-only
+# mirror would resolve onto musl hosts and die at exec. Cross-checked live:
+#
+#   $ docker run --rm -v …linux-amd64:/b:ro alpine:3.20 /b/duckdb …
+#   sh: /b/duckdb: not found            ← the loader, not a missing file
+#
+# NOT UPX-packed (which would have defeated the whole gate by hiding
+# PT_INTERP): section headers present, PT_INTERP present, DT_NEEDED populated,
+# `file` reports the interpreter rather than "statically linked".
+#
+# The container legs in ../mirror-base.yml are what turn these claims into
+# evidence, and they carry the measured `setup:` line for libstdc++ on musl.
+#
+# ─── Scope + resolution (verified on EVERY in-range release) ────────────────
+#
+# The mirrored range is exactly v1.5.3, v1.5.4, v1.5.5 — three releases. Each
+# pattern below was matched against each release's full 29-asset list: EXACTLY
+# ONE match, every time, both ways. A pattern matching zero is silently skipped
+# rather than an error, which would yield a green run with a missing platform.
+#
+# ⚠ USE THE `.zip` ASSETS, NEVER THE `.gz` TWINS. Upstream ships both for every
+# unix asset, and the `.gz` is a BARE single-file gzip — a compressed ELF with
+# no tar layer — which the pipeline cannot unpack. Measured:
+#
+#   $ gzip -dc duckdb_cli-linux-amd64.gz | tar tf -
+#   tar: This does not look like a tar archive
+#   $ gzip -dc duckdb_cli-linux-amd64.gz | head -c4 | od -An -tx1
+#    7f 45 4c 46            ← ELF magic, not `ustar` at offset 257
+#
+# Worse, `asset_type: binary` would FALSE-GREEN it: prepare exits 0 shipping
+# still-compressed bytes at mode 0755. Windows ships `.zip` only, so `.zip`
+# is also the one format spanning every platform and the whole range.
+#
+# ⚠ EVERY PATTERN IS END-ANCHORED, and that is load-bearing twice over:
+#   `^duckdb_cli-linux-amd64\.zip$` without the `$` would also prefix-match
+#   `duckdb_cli-linux-amd64-musl.zip` → ambiguous-match error;
+#   `^duckdb_cli-osx-…` without it would reach `duckdb_cli-osx-universal.zip`.
+#
+# Upstream also publishes, and this mirror deliberately does not carry:
+#   duckdb_cli-*.gz              — bare gzip, unsupported (above)
+#   duckdb_cli-osx-universal.zip — fat binary; the arch-split pair is declared
+#                                  instead, so each platform gets only the
+#                                  slice it can run (half the bytes)
+#   libduckdb-<plat>.zip         — the C API shared library, not the CLI
+#   libduckdb-src.zip            — amalgamated C++ source, not the CLI
+#   static-libs-<plat>.zip       — link-time static archives, not the CLI
+# The `^duckdb_cli-` prefix anchor excludes all three library deliverables.
+assets:
+  "linux/amd64+libc.glibc":
+    - "^duckdb_cli-linux-amd64\\.zip$"
+  "linux/amd64+libc.musl":
+    - "^duckdb_cli-linux-amd64-musl\\.zip$"
+  "linux/arm64+libc.glibc":
+    - "^duckdb_cli-linux-arm64\\.zip$"
+  "linux/arm64+libc.musl":
+    - "^duckdb_cli-linux-arm64-musl\\.zip$"
+  # ── Pass 2 (darwin) ────────────────────────────────────────────────────────
+  # The OS token is `osx`, not `darwin`/`macos`. Both keys verified 1-match on
+  # all three in-range releases; uncommented together with their `platforms:`
+  # entries in ../mirror-base.yml.
+  #
+  # darwin/amd64:
+  #   - "^duckdb_cli-osx-amd64\\.zip$"
+  # darwin/arm64:
+  #   - "^duckdb_cli-osx-arm64\\.zip$"
+  #
+  # ── Pass 3 (windows) ───────────────────────────────────────────────────────
+  # windows/amd64:
+  #   - "^duckdb_cli-windows-amd64\\.zip$"
+  # windows/arm64:
+  #   - "^duckdb_cli-windows-arm64\\.zip$"
+
+# Every zip is FLAT and holds EXACTLY ONE ENTRY — `duckdb` (`duckdb.exe` on
+# Windows) at the archive root, with no wrapper directory and no LICENSE or
+# README beside it. Verified with `unzip -l` on all eight declared assets of
+# 1.5.5 and the four Linux ones of 1.5.3: "1 file", every time. So
+# strip_components 0 on every platform, the binary lands at the content root,
+# and one metadata.json (PATH = ${installPath}) serves every platform.
+# The `.exe` suffix comes from the archive itself — nothing synthesises it and
+# no per-platform `name:` override is needed (that is a raw-`binary` concern).
+asset_type:
+  type: archive
+  strip_components: 0
+
+# FORCED by the flat archive, not chosen. `bin_scan` only inspects an
+# interface-visible `${installPath}/<dir>` PATH entry, and this archive has no
+# subdirectory to point one at, so both `auto` and `verify` fail spec load at
+# exit 65:
+#
+#   bin_scan is enabled but metadata.json declares no interface-visible
+#   ${installPath}/<dir> PATH entry — the verification would inspect no file and
+#   pass green whatever the archive contains.
+#
+# The `binaries` list in metadata.json is therefore hand-maintained, exactly as
+# that error directs. It is as short as a list gets: `duckdb` is the archive's
+# only entry. Quoted so no YAML 1.1 reader folds the bare word into boolean
+# `false`.
+bin_scan: "off"
+
+metadata:
+  default: metadata.json
+
+catalog:
+  # `catalog.*` resolves against THIS directory, so the per-package logo beside
+  # the spec is named plainly. Upstream's own stacked mark, unmodified apart
+  # from scaling (logo/DuckDB_Logo-stacked.svg).
+  logo: logo.svg
+
+versions:
+  # 1.5.3 per the run's package binding — the third-newest release on the 1.5
+  # train, and the oldest of the three the mirror carries. Every release from
+  # here to 1.5.5 resolves all declared platforms; none is asset-less, and
+  # every asset name is version-independent (`duckdb_cli-linux-amd64.zip`
+  # carries no version token), so a release cannot re-ship a previous version's
+  # binaries under a new name. The binaries' own `--version` was read on both
+  # ends and agrees with its tag (v1.5.3 / v1.5.5).
+  min: "1.5.3"
+  new_per_run: 5
+  poll_interval: "58 */6 * * *"
+
+tests:
+  # `script:` resolves from the REPOSITORY ROOT — unlike `metadata.default` and
+  # `catalog.logo` above, which resolve against this spec's own directory.
+  - name: smoke
+    script: duckdb/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate:
+  #   $ gh api repos/duckdb/duckdb/license --jq '.license.spdx_id'
+  #   MIT
+  org.opencontainers.image.licenses: "MIT"
+
+announce:
+  # Spelled out, not derived from target.repository — the logical name and the
+  # physical path are related by convention only.
+  package: duckdb/duckdb
+  fork: ocx-contrib/index

@@ -1,0 +1,139 @@
+# Shared base for every spec in this repository (duckdb, the in-process
+# analytical database).
+#
+# NOT a spec: it has no name/target/source and is never loaded on its own.
+# Everything a package owns — name, target, source, assets, asset_type,
+# bin_scan, metadata, catalog, tests, versions, announce, annotations — stays
+# in that package's own mirror.yml.
+#
+# ⚠️ `extends:` is a SHALLOW merge of top-level keys. A spec that sets a key
+# below replaces that block OUTRIGHT — there is no per-key merge. `platforms:`
+# is where this bites: it carries BOTH the runner matrix and the container
+# legs, so a child that restates it to tweak one runner silently drops every
+# `containers:` entry. Nothing reds — the legs simply stop existing, and every
+# os.features claim in that spec goes back to being merely asserted. Restate
+# `platforms:` IN FULL or not at all. duckdb/mirror.yml deliberately does NOT
+# restate it, which removes that trap structurally.
+
+skip_prereleases: true
+cascade: true
+
+# New package; upstream versions are bare semver (`1.5.5`) carrying no `+build`
+# segment, so the fleet default applies with no exception. A cascade tag
+# (`latest`, `1`, `1.5`) re-points on every re-publish; without a build segment
+# the new manifest would reuse the bare version tag and orphan the prior digest
+# for registry GC, breaking any `@sha256:` pin in a consumer's ocx.lock.
+build_timestamp: date
+
+verify:
+  github_asset_digest: true
+
+concurrency:
+  # Assets are 19–22 MB zips, but each wraps a single ~55–66 MB executable, so
+  # the bundle compression stage is the expensive one, not the download.
+  max_downloads: 4
+  max_bundles: 2
+  max_pushes: 2
+  rate_limit_ms: 100
+  max_retries: 3
+  compression_threads: 0
+
+# ─── Platform matrix ────────────────────────────────────────────────────────
+#
+# `os.features` states what an artifact REQUIRES OF THE HOST — it is not a
+# label for how it was built. Both Linux flavours were byte-measured on BOTH
+# declared arches at BOTH ends of the mirrored range (1.5.3 and 1.5.5); the
+# full transcript is recorded above duckdb/mirror.yml's `assets:`. Summary:
+#
+#   duckdb_cli-linux-<arch>.zip       → dynamically linked,
+#                                       interpreter /lib64/ld-linux-x86-64.so.2
+#                                       (aarch64: /lib/ld-linux-aarch64.so.1)
+#                                       NEEDED … libc.so.6      → +libc.glibc
+#   duckdb_cli-linux-<arch>-musl.zip  → dynamically linked,
+#                                       interpreter /lib/ld-musl-<arch>.so.1
+#                                       NEEDED … libc.musl-*.so.1 → +libc.musl
+#
+# NEITHER is static. That is the skill's "musl and gnu builds, neither static"
+# row, so BOTH keys are declared, each with its own asset regex: a glibc-only
+# mirror would die at exec on every musl host with the loader's bare
+# "not found", and a bare key would be a false universality claim in the other
+# direction. Cross-checked live — the glibc build in alpine:3.20 answers
+# `sh: /b/duckdb: not found`.
+#
+# ─── `containers[].setup` — measured, per leg ───────────────────────────────
+#
+# All four artifacts additionally NEED libstdc++.so.6 and libgcc_s.so.1
+# (duckdb is C++). Measured in the three stock images with the real binary:
+#
+#   ubuntu:24.04  glibc build, STOCK → `SELECT 1+1` = 2      → no setup
+#   fedora:40     glibc build, STOCK → `SELECT 1+1` = 2      → no setup
+#   alpine:3.20   musl  build, STOCK → Error loading shared library
+#                                      libstdc++.so.6: No such file or directory
+#   alpine:3.20   musl  build + `apk add --no-cache libstdc++` → 2
+#
+# So only the musl legs carry a `setup:` line, and it is the minimum that makes
+# the artifact LOAD — not a pre-test hook. `os.features` carries libc only, so
+# a consumer on a bare musl userland needs libstdc++ installed too; that fact
+# has no declarable home in the spec and is recorded in duckdb/CATALOG.md.
+#
+# A future package here whose libc measurement differs must restate this whole
+# block in its own spec — see the shallow-merge warning at the top.
+platforms:
+  "linux/amd64+libc.glibc":
+    runner: ubuntu-latest
+    # No alpine leg: this key claims the artifact REQUIRES glibc, and the
+    # renderer is right to expect it never to be tested under musl.
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "fedora:40",    shell: bash }
+  "linux/amd64+libc.musl":
+    runner: ubuntu-latest
+    containers:
+      - image: "alpine:3.20"
+        shell: sh
+        setup:
+          - "apk add --no-cache libstdc++"
+  "linux/arm64+libc.glibc":
+    # arm64 container legs run natively — no qemu — so the runner arch must
+    # match the platform or the renderer reds the leg up front.
+    runner: ubuntu-24.04-arm
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "fedora:40",    shell: bash }
+  "linux/arm64+libc.musl":
+    runner: ubuntu-24.04-arm
+    containers:
+      - image: "alpine:3.20"
+        shell: sh
+        setup:
+          - "apk add --no-cache libstdc++"
+  # ── Pass 2 (darwin) ────────────────────────────────────────────────────────
+  # Kept commented in lockstep with the matching `assets:` keys in
+  # duckdb/mirror.yml. A declared platform with no resolvable asset does NOT
+  # red — it boots a real runner and reports SUCCESS having tested nothing —
+  # so the platform key and its asset regex are uncommented in the SAME pass.
+  #
+  # darwin/amd64:
+  #   # Intel slice tested on the arm64 macos-14 runner via Rosetta 2 —
+  #   # GitHub's native macos-13 Intel pool is exhausted and deadlocks push.
+  #   runner: macos-14
+  #   prefix: ["arch", "-x86_64"]
+  # darwin/arm64:
+  #   runner: macos-14
+  #   shell: bash
+  #
+  # ── Pass 3 (windows) ───────────────────────────────────────────────────────
+  # windows/amd64:
+  #   runner: windows-latest
+  #   shell: pwsh
+  # windows/arm64:
+  #   runner: windows-11-arm
+  #   shell: pwsh
+  #
+  # No `containers:` on darwin or windows — those runners have no Linux
+  # container engine, and the key is rejected at spec load.
+
+notify:
+  discord:
+    webhook_secret: OCX_MIRROR_DISCORD_HOOK
+    user_id: "227748867204972545"  # pinged in-message on failures
